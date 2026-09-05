@@ -1418,6 +1418,37 @@ var _ = Describe("Collector", Ordered, func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(data).To(Equal(expData))
 			})
+
+			It("collects correct data when snippets include block directives, quotes, and comments", func(ctx SpecContext) {
+				fakeGraphGetter.GetLatestGraphReturns(&graph.Graph{
+					SnippetsFilters: map[types.NamespacedName]*graph.SnippetsFilter{
+						{Namespace: "test", Name: "sf-1"}: {
+							Snippets: map[ngfAPI.NginxContext]string{
+								ngfAPI.NginxContextMain:               "worker_priority 0; # comment with ; and {",
+								ngfAPI.NginxContextHTTP:               "aio on; map $http_x $x {default 0; 'abc' 1;}",
+								ngfAPI.NginxContextHTTPServer:         `proxy_set_header hello "myvalue;abc"; auth_delay 10s;`,
+								ngfAPI.NginxContextHTTPServerLocation: "# leading comment;\nkeepalive_time 10s;",
+							},
+						},
+					},
+				})
+
+				expData.SnippetsFilterCount = 1
+				expData.SnippetsFiltersDirectives = []string{
+					"aio-http",
+					"map-http",
+					"keepalive_time-location",
+					"worker_priority-main",
+					"auth_delay-server",
+					"proxy_set_header-server",
+				}
+				expData.SnippetsFiltersDirectivesCount = []int64{1, 1, 1, 1, 1, 1}
+
+				data, err := dataCollector.Collect(ctx)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(data).To(Equal(expData))
+			})
 		})
 	})
 })

@@ -680,18 +680,158 @@ func collectSnippetsPoliciesDirectives(g *graph.Graph) ([]string, []int64) {
 	return parseDirectiveContextMapIntoLists(directiveContextMap)
 }
 
+// parseSnippetValueIntoDirectives parses the directive names from an NGINX snippet value.
+// It properly handles comments (#), quoted strings ('...' and "..." with escaped quotes),
+// semicolons inside values/comments, and block directives (such as map $x $y { ... })
+// by capturing top-level directive names and skipping block bodies and comments.
 func parseSnippetValueIntoDirectives(snippetValue string) []string {
-	separatedDirectives := strings.Split(snippetValue, ";")
-	directives := make([]string, 0, len(separatedDirectives))
+	var directives []string
+	n := len(snippetValue)
+	i := 0
 
-	for _, directive := range separatedDirectives {
-		// the strings.TrimSpace is needed in the case of multi-line NGINX Snippet values
-		directive = strings.Split(strings.TrimSpace(directive), " ")[0]
+	for i < n {
+		// Skip whitespace
+		for i < n && (snippetValue[i] == ' ' || snippetValue[i] == '\t' || snippetValue[i] == '\r' || snippetValue[i] == '\n') {
+			i++
+		}
+		if i >= n {
+			break
+		}
 
-		// splitting on the delimiting character can result in a directive being empty or a space/newline character,
-		// so we check here to ensure it's not
-		if directive != "" {
-			directives = append(directives, directive)
+		// Skip comments starting with '#'
+		if snippetValue[i] == '#' {
+			for i < n && snippetValue[i] != '\n' {
+				i++
+			}
+			continue
+		}
+
+		// Skip stray semicolons or closing braces
+		if snippetValue[i] == ';' || snippetValue[i] == '}' {
+			i++
+			continue
+		}
+
+		// Read directive name
+		start := i
+		for i < n && snippetValue[i] != ' ' && snippetValue[i] != '\t' && snippetValue[i] != '\r' && snippetValue[i] != '\n' &&
+			snippetValue[i] != ';' && snippetValue[i] != '{' && snippetValue[i] != '#' {
+			i++
+		}
+
+		directiveName := snippetValue[start:i]
+
+		// Discard invalid directive names (e.g. variables starting with $, quotes, braces)
+		if directiveName == "" || strings.HasPrefix(directiveName, "$") || strings.HasPrefix(directiveName, "'") || strings.HasPrefix(directiveName, "\"") {
+			continue
+		}
+
+		directives = append(directives, directiveName)
+
+		// Scan until the end of this directive statement (either ';' or '{...}')
+		for i < n {
+			// Skip whitespace
+			if snippetValue[i] == ' ' || snippetValue[i] == '\t' || snippetValue[i] == '\r' || snippetValue[i] == '\n' {
+				i++
+				continue
+			}
+
+			// Comment
+			if snippetValue[i] == '#' {
+				for i < n && snippetValue[i] != '\n' {
+					i++
+				}
+				continue
+			}
+
+			// Single quote string
+			if snippetValue[i] == '\'' {
+				i++
+				for i < n && snippetValue[i] != '\'' {
+					if snippetValue[i] == '\\' && i+1 < n {
+						i += 2
+					} else {
+						i++
+					}
+				}
+				if i < n {
+					i++ // consume closing quote
+				}
+				continue
+			}
+
+			// Double quote string
+			if snippetValue[i] == '"' {
+				i++
+				for i < n && snippetValue[i] != '"' {
+					if snippetValue[i] == '\\' && i+1 < n {
+						i += 2
+					} else {
+						i++
+					}
+				}
+				if i < n {
+					i++ // consume closing quote
+				}
+				continue
+			}
+
+			// Semicolon ends a simple directive
+			if snippetValue[i] == ';' {
+				i++
+				break
+			}
+
+			// Opening brace begins a block directive; skip entire block
+			if snippetValue[i] == '{' {
+				i++
+				braceDepth := 1
+				for i < n && braceDepth > 0 {
+					if snippetValue[i] == '#' {
+						for i < n && snippetValue[i] != '\n' {
+							i++
+						}
+						continue
+					}
+					if snippetValue[i] == '\'' {
+						i++
+						for i < n && snippetValue[i] != '\'' {
+							if snippetValue[i] == '\\' && i+1 < n {
+								i += 2
+							} else {
+								i++
+							}
+						}
+						if i < n {
+							i++
+						}
+						continue
+					}
+					if snippetValue[i] == '"' {
+						i++
+						for i < n && snippetValue[i] != '"' {
+							if snippetValue[i] == '\\' && i+1 < n {
+								i += 2
+							} else {
+								i++
+							}
+						}
+						if i < n {
+							i++
+						}
+						continue
+					}
+					if snippetValue[i] == '{' {
+						braceDepth++
+					} else if snippetValue[i] == '}' {
+						braceDepth--
+					}
+					i++
+				}
+				break
+			}
+
+			i++
 		}
 	}
 
